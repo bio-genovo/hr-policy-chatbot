@@ -2,9 +2,9 @@ name: Keep Streamlit App Awake
 
 on:
   schedule:
-    # Runs every 6 hours (at 00:00, 06:00, 12:00, and 18:00 UTC)
-    - cron: '0 */6 * * *'
-  workflow_dispatch: # Allows you to run it manually to test
+    # Runs every 3 hours to prevent 12-hour sleep
+    - cron: '0 */3 * * *'
+  workflow_dispatch: # Allows manual testing
 
 jobs:
   wake-up:
@@ -20,27 +20,52 @@ jobs:
           pip install playwright
           playwright install chromium
 
-      - name: Visit App and Click Wake Button
+      - name: Visit App and Keep Awake
         run: |
           python -c "
           from playwright.sync_api import sync_playwright
 
+          APP_URL = 'https://hr-guide.streamlit.app/'
+
           with sync_playwright() as p:
-              browser = p.chromium.launch()
-              page = browser.new_page()
-              print('Opening app...')
-              page.goto('https://streamlit.app', timeout=60000)
+              browser = p.chromium.launch(headless=True)
+              context = browser.new_context(
+                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              )
+              page = context.new_page()
+              print(f'Opening {APP_URL}...')
+              page.goto(APP_URL, wait_until='networkidle', timeout=60000)
               page.wait_for_timeout(5000)
 
-              # Look for the wake-up button and click it if present
-              wake_button = page.locator('button:has-text(\"get this app back up\")')
-              if wake_button.count() > 0:
-                  print('App is asleep. Clicking wake-up button...')
-                  wake_button.first.click()
-                  page.wait_for_timeout(15000)
-                  print('Wake-up triggered!')
-              else:
-                  print('App is already awake!')
+              clicked = False
+              # Search main page and all iframes for the wake-up button
+              for frame in page.frames:
+                  wake_button = frame.locator('button:has-text(\"get this app back up\")')
+                  if wake_button.count() > 0:
+                      print('App is asleep. Clicking wake-up button...')
+                      wake_button.first.click()
+                      clicked = True
+                      break
 
+              if clicked:
+                  print('Waiting 45 seconds for app container to boot...')
+                  page.wait_for_timeout(45000)
+              else:
+                  print('Wake-up button not found. Checking if app is already awake...')
+
+              # Verify the Streamlit app container is active in any frame
+              app_loaded = False
+              for frame in page.frames:
+                  if frame.locator('[data-testid=\"stAppViewContainer\"]').count() > 0:
+                      app_loaded = True
+                      break
+
+              if app_loaded:
+                  print('Success: Streamlit app is awake and active!')
+              else:
+                  print('Warning: App container not detected. Page title:', page.title())
+
+              # Keep session open briefly to register traffic
+              page.wait_for_timeout(10000)
               browser.close()
           "
